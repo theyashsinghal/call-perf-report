@@ -213,12 +213,19 @@ if uploaded_files:
             styled_summary = style_summary_df(report_df)
             st.dataframe(styled_summary, use_container_width=True)
 
+            # --- New Feature: Checkbox for Extended Report ---
+            extended_report = st.checkbox("Enable Extended Report (Include detailed data sheets)", value=False)
+
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # 1. Always write the Summary sheet
                 styled_summary.to_excel(writer, sheet_name="Summary", index=True)
-                for category_name, df_cat in sheets_by_category.items():
-                    styled_cat = style_generic_df(df_cat)
-                    styled_cat.to_excel(writer, sheet_name=category_name, index=False)
+                
+                # 2. Only write detail sheets if checkbox is enabled
+                if extended_report:
+                    for category_name, df_cat in sheets_by_category.items():
+                        styled_cat = style_generic_df(df_cat)
+                        styled_cat.to_excel(writer, sheet_name=category_name, index=False)
 
             output.seek(0)
 
