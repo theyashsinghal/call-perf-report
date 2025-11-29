@@ -13,20 +13,33 @@ def calculate_report(df, avg_col=None):
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df = df.dropna(subset=['date'])
 
+    # Ensure 'contacted' is numeric (0 or 1), which is already handled in preprocessing
     df['contacted'] = pd.to_numeric(df['contacted'], errors='coerce').fillna(0).astype(int)
+    
     df['bot'] = df['bot'].fillna('Blank_Bot_Name')
-
     df['recording_url'] = df['recording_url'].fillna('').astype(str).str.strip()
 
     all_bots = sorted(df['bot'].unique())
 
+    # Get the latest entry per lead
     latest_per_lead = df.sort_values('date').groupby(['bot', 'mobile_number'], as_index=False).last()
 
-    # Determine if any call for bot/mobile_number has non-empty recording_url
-    lead_connection_status = df.groupby(['bot', 'mobile_number'])['recording_url'].apply(lambda urls: (urls != '').any()).reset_index().rename(columns={'recording_url': 'is_connected'})
+    # --- START OF MODIFIED LOGIC ---
+    # NEW LOGIC: Determine if ANY call for bot/mobile_number has contacted == 1
+    
+    # Check if the lead was EVER contacted (contacted == 1) across all attempts
+    lead_connection_status = df.groupby(['bot', 'mobile_number'])['contacted'].max().reset_index().rename(columns={'contacted': 'is_connected_flag'})
+    # Using .max() works because max(0, 1) is 1. If any row is 1, the max for the group is 1.
 
+    # Merge the historical 'is_connected_flag' into the latest lead status
     latest_per_lead = latest_per_lead.merge(lead_connection_status, on=['bot', 'mobile_number'], how='left')
-
+    
+    # Define boolean flags based on the new logic
+    latest_per_lead['connected_flag'] = latest_per_lead['is_connected_flag'] == 1
+    latest_per_lead['not_connected_flag'] = latest_per_lead['is_connected_flag'] == 0
+    # --- END OF MODIFIED LOGIC ---
+    
+    # Remaining logic remains based on the latest outcome
     follow_up_exclude = {"assign to live agent", "converted", "lost"}
 
     unique_leads_row = {'Metric': 'Unique leads'}
@@ -40,9 +53,7 @@ def calculate_report(df, avg_col=None):
     lost_row = {'Metric': 'Lost'}
     converted_row = {'Metric': 'Converted'}
 
-    # Flags based on new logic
-    latest_per_lead['connected_flag'] = latest_per_lead['is_connected'] == True
-    latest_per_lead['not_connected_flag'] = latest_per_lead['is_connected'] == False
+    # Flags based on latest outcome (UNCHANGED)
     latest_per_lead['converted_flag'] = latest_per_lead['outcome'] == 'converted'
     latest_per_lead['lost_flag'] = latest_per_lead['outcome'] == 'lost'
     latest_per_lead['assigned_to_agent_flag'] = latest_per_lead['outcome'] == 'assign to live agent'
@@ -73,8 +84,10 @@ def calculate_report(df, avg_col=None):
 
         bot_latest = latest_per_lead[latest_per_lead['bot'] == bot_name]
 
+        # Use the new flags for counting
         connected_count = bot_latest[bot_latest['connected_flag']]['mobile_number'].nunique()
         not_connected_count = bot_latest[bot_latest['not_connected_flag']]['mobile_number'].nunique()
+        
         connectivity_perc = round((connected_count / unique_leads), 2) if unique_leads > 0 else 0.0
         follow_up_count = bot_latest[bot_latest['follow_up_flag']]['mobile_number'].nunique()
         assigned_to_agent = bot_latest[bot_latest['assigned_to_agent_flag']]['mobile_number'].nunique()
@@ -117,6 +130,8 @@ def calculate_report(df, avg_col=None):
 
     return report_df, sheets_by_category
 
+
+# (The style_summary_df, style_generic_df, and the main Streamlit app logic remain unchanged from the previous update)
 
 def style_summary_df(df):
     def style_data_rows(s):
@@ -213,15 +228,12 @@ if uploaded_files:
             styled_summary = style_summary_df(report_df)
             st.dataframe(styled_summary, use_container_width=True)
 
-            # --- New Feature: Checkbox for Extended Report ---
             extended_report = st.checkbox("Enable Extended Report (Include detailed data sheets)", value=False)
 
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # 1. Always write the Summary sheet
                 styled_summary.to_excel(writer, sheet_name="Summary", index=True)
                 
-                # 2. Only write detail sheets if checkbox is enabled
                 if extended_report:
                     for category_name, df_cat in sheets_by_category.items():
                         styled_cat = style_generic_df(df_cat)
